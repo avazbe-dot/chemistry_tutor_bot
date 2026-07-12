@@ -41,6 +41,18 @@ from telegram.ext import (
 TOKEN = os.environ.get("BOT_TOKEN", "ВАШ_ТОКЕН_ОТ_BOTFATHER")
 GEMINI_API_KEY = os.environ.get("GEMINI_KEY", "ВАШ_КЛЮЧ_GEMINI")  # aistudio.google.com/apikey
 
+# Только этот Telegram ID может добавлять/удалять материалы.
+# Узнать свой ID: напишите /start боту @userinfobot в Telegram.
+# Можно также задать через переменную окружения ADMIN_ID (например, на Render).
+try:
+    ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))
+except ValueError:
+    ADMIN_ID = 0
+
+
+def is_admin(user_id):
+    return ADMIN_ID != 0 and user_id == ADMIN_ID
+
 STORE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "content_store.json")
 
 
@@ -611,6 +623,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("⛔ Эта команда доступна только администратору бота.")
+        return
     context.user_data["pending_action"] = "add"
     context.user_data.pop("last_content_key", None)
     await update.message.reply_text(
@@ -620,6 +635,9 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("⛔ Эта команда доступна только администратору бота.")
+        return
     context.user_data["pending_action"] = "delete"
     context.user_data.pop("last_content_key", None)
     await update.message.reply_text(
@@ -695,6 +713,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ---- добавить / изменить материал ----
     if data.startswith("add:"):
+        if not is_admin(query.from_user.id):
+            await query.answer("⛔ Только администратор может добавлять материалы.", show_alert=True)
+            return
         key = data[4:]
         context.user_data["awaiting_content"] = key
         context.user_data["last_content_key"] = key
@@ -722,6 +743,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ---- удалить конкретный материал (с подтверждением) ----
     if data.startswith("delitem:"):
+        if not is_admin(query.from_user.id):
+            await query.answer("⛔ Только администратор может удалять материалы.", show_alert=True)
+            return
         key, item_id = data[8:].rsplit(":", 1)
         await query.edit_message_text(
             "🗑 Удалить этот материал? Это нельзя отменить.",
@@ -730,6 +754,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data.startswith("delitemok:"):
+        if not is_admin(query.from_user.id):
+            await query.answer("⛔ Доступ запрещён.", show_alert=True)
+            return
         key, item_id = data[10:].rsplit(":", 1)
         delete_item(key, item_id)
         text, kb = render_content_page_by_key(key)
@@ -831,6 +858,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "task:add":
+        if not is_admin(query.from_user.id):
+            await query.answer("⛔ Только администратор может добавлять задачи.", show_alert=True)
+            return
         context.user_data["awaiting_content"] = "TASKS_BANK_APPEND"
         await query.edit_message_text(
             "✏ Отправьте текст задачи (условие и решение) следующим сообщением.",
