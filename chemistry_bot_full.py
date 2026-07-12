@@ -55,8 +55,24 @@ def is_admin(user_id):
 
 STORE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "content_store.json")
 
+# Облачное хранение (jsonbin.io) — чтобы материалы не терялись при передеплое на Render.
+# Если переменные не заданы, используется обычный локальный файл (подходит для Pydroid).
+JSONBIN_API_KEY = os.environ.get("JSONBIN_API_KEY", "")
+JSONBIN_BIN_ID = os.environ.get("JSONBIN_BIN_ID", "")
+_USE_CLOUD_STORE = bool(JSONBIN_API_KEY and JSONBIN_BIN_ID)
+
 
 def load_store():
+    if _USE_CLOUD_STORE:
+        try:
+            url = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}/latest"
+            req = urllib.request.Request(url, headers={"X-Master-Key": JSONBIN_API_KEY})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            return data.get("record", {})
+        except Exception as e:
+            print(f"⚠ Не удалось загрузить облачное хранилище: {e}")
+            return {}
     if os.path.exists(STORE_FILE):
         try:
             with open(STORE_FILE, "r", encoding="utf-8") as f:
@@ -67,6 +83,19 @@ def load_store():
 
 
 def save_store():
+    if _USE_CLOUD_STORE:
+        try:
+            url = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}"
+            payload = json.dumps(STORE).encode("utf-8")
+            req = urllib.request.Request(
+                url, data=payload, method="PUT",
+                headers={"X-Master-Key": JSONBIN_API_KEY, "Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=15):
+                pass
+        except Exception as e:
+            print(f"⚠ Не удалось сохранить в облачное хранилище: {e}")
+        return
     with open(STORE_FILE, "w", encoding="utf-8") as f:
         json.dump(STORE, f, ensure_ascii=False, indent=2)
 
@@ -253,6 +282,8 @@ def content_title_info(kind, *args):
         return f"🔗 Цепная задача: {topic}", f"c:cpl:{branch}", "Цепочка превращений по этой теме ещё не добавлена."
     if kind == "dtm":
         return "🧪 ДТМ тесты", "c:main", "Материалы для подготовки к ДТМ по химии ещё не добавлены."
+    if kind == "formulas":
+        return "📐 Общие формулы", "c:main", "Дополнительные формулы ещё не добавлены."
     return "Материал", "main", "Пусто."
 
 
@@ -346,6 +377,10 @@ def render_content_page(kind, *args):
         ]
         buttons.append([InlineKeyboardButton("➕ Добавить ещё", callback_data=f"add:{key}")])
         buttons.append([InlineKeyboardButton("⬅ Назад", callback_data=back_cb)])
+
+    if kind == "formulas":
+        text = FORMULAS_TEXT + "\n\n" + "─" * 20 + "\n\n" + text
+
     return text, InlineKeyboardMarkup(buttons)
 
 
@@ -811,7 +846,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "c:formulas":
-        await query.edit_message_text(FORMULAS_TEXT, reply_markup=back_kb("c:main"))
+        await show_leaf(query, context, content_key("formulas"))
         return
 
     if data == "c:dtm":
