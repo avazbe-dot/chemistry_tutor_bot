@@ -69,7 +69,9 @@ def load_store():
             req = urllib.request.Request(url, headers={"X-Master-Key": JSONBIN_API_KEY})
             with urllib.request.urlopen(req, timeout=15) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
-            return data.get("record", {})
+            record = data.get("record", {})
+            print(f"✅ Загружено из облака (jsonbin): {len(record)} ключей — {list(record.keys())}")
+            return record
         except Exception as e:
             print(f"⚠ Не удалось загрузить облачное хранилище: {e}")
             return {}
@@ -93,6 +95,7 @@ def save_store():
             )
             with urllib.request.urlopen(req, timeout=15):
                 pass
+            print(f"✅ Сохранено в облако (jsonbin): {len(STORE)} ключей — {list(STORE.keys())}")
         except Exception as e:
             print(f"⚠ Не удалось сохранить в облачное хранилище: {e}")
         return
@@ -1079,6 +1082,11 @@ def main():
     if TOKEN == "ВАШ_ТОКЕН_ОТ_BOTFATHER":
         print("⚠ Сначала вставьте свой токен в переменную TOKEN!")
         return
+
+    if _USE_CLOUD_STORE:
+        print(f"☁ Облачное хранилище включено. Bin ID: {JSONBIN_BIN_ID}")
+    else:
+        print("💾 Облачное хранилище НЕ настроено — используется локальный файл (данные пропадут при передеплое!)")
 
     threading.Thread(target=_run_health_server, daemon=True).start()
 
