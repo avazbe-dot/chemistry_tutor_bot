@@ -66,7 +66,13 @@ def load_store():
     if _USE_CLOUD_STORE:
         try:
             url = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}/latest"
-            req = urllib.request.Request(url, headers={"X-Master-Key": JSONBIN_API_KEY})
+            req = urllib.request.Request(
+                url,
+                headers={
+                    "X-Master-Key": JSONBIN_API_KEY,
+                    "User-Agent": "Mozilla/5.0 (compatible; ChemistryBot/1.0)",
+                },
+            )
             with urllib.request.urlopen(req, timeout=15) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
             record = data.get("record", {})
@@ -95,6 +101,7 @@ def save_store():
                     "X-Master-Key": JSONBIN_API_KEY,
                     "Content-Type": "application/json",
                     "X-Bin-Versioning": "false",
+                    "User-Agent": "Mozilla/5.0 (compatible; ChemistryBot/1.0)",
                 },
             )
             with urllib.request.urlopen(req, timeout=15):
