@@ -91,7 +91,11 @@ def save_store():
             payload = json.dumps(STORE).encode("utf-8")
             req = urllib.request.Request(
                 url, data=payload, method="PUT",
-                headers={"X-Master-Key": JSONBIN_API_KEY, "Content-Type": "application/json"},
+                headers={
+                    "X-Master-Key": JSONBIN_API_KEY,
+                    "Content-Type": "application/json",
+                    "X-Bin-Versioning": "false",
+                },
             )
             with urllib.request.urlopen(req, timeout=15):
                 pass
