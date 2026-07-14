@@ -22,6 +22,7 @@ import asyncio
 import json
 import os
 import random
+import re
 import threading
 import urllib.request
 import uuid
@@ -120,7 +121,13 @@ def call_gemini(question):
         "https://generativelanguage.googleapis.com/v1beta/models/"
         f"gemini-flash-latest:generateContent?key={GEMINI_API_KEY}"
     )
-    prompt = f"Ты — помощник по химии. Ответь кратко, понятно и по делу: {question}"
+    prompt = (
+        "Ты — помощник по химии в Telegram-боте. Ответь кратко, понятно и по делу на вопрос ниже. "
+        "ВАЖНО: пиши обычным простым текстом, без LaTeX ($...$, \\text{}, \\frac и т.д.) и без markdown-разметки "
+        "(**жирный**, # заголовки). Химические формулы пиши как обычный текст с обычными цифрами, "
+        "например C6H5OH, H2SO4, CH3COOH.\n\n"
+        f"Вопрос: {question}"
+    )
     payload = json.dumps({
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"maxOutputTokens": 500},
@@ -146,7 +153,18 @@ def call_gemini(question):
         finish_reason = candidates[0].get("finishReason", "неизвестна")
         raise RuntimeError(f"Gemini вернул пустой ответ. Причина: {finish_reason}")
 
-    return parts[0].get("text", "").strip() or "(пустой ответ от ИИ)"
+    text = parts[0].get("text", "").strip() or "(пустой ответ от ИИ)"
+    return clean_ai_text(text)
+
+
+def clean_ai_text(text):
+    """Убирает LaTeX и markdown-мусор на случай, если ИИ всё же его добавил."""
+    text = re.sub(r"\\text\{([^}]*)\}", r"\1", text)
+    text = re.sub(r"\\frac\{([^}]*)\}\{([^}]*)\}", r"(\1)/(\2)", text)
+    text = text.replace("$$", "").replace("$", "")
+    text = text.replace("**", "").replace("##", "").replace("# ", "")
+    text = re.sub(r"\\[a-zA-Z]+", "", text)
+    return text.strip()
 
 # ========================= ТЕМЫ =========================
 
