@@ -11,11 +11,6 @@
    (получить бесплатно: aistudio.google.com/apikey). Если ключа нет —
    просто не трогайте, остальной бот будет работать без этого раздела.
 4. Запустите: python chemistry_bot_full.py
-
-КАК ДОБАВЛЯТЬ РЕАЛЬНЫЙ КОНТЕНТ:
-Сейчас в лекциях/видеоуроках/задачах по каждой теме стоит заготовка-плейсхолдер.
-Чтобы вставить настоящий текст лекции, ссылку на видео или задачи —
-найдите словарь CONTENT ниже и добавьте туда запись по образцу в комментариях.
 """
 
 import asyncio
@@ -24,6 +19,7 @@ import os
 import random
 import threading
 import urllib.request
+import urllib.error
 import uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -37,13 +33,12 @@ from telegram.ext import (
 )
 
 # Если бот запущен на хостинге (Render и т.п.), токен и ключ берутся из переменных
-# окружения BOT_TOKEN / GEMINI_KEY. Если их нет — используются значения ниже (для Pydroid).
-TOKEN = os.environ.get("BOT_TOKEN", "ВАШ_ТОКЕН_ОТ_BOTFATHER")
-GEMINI_API_KEY = os.environ.get("GEMINI_KEY", "ВАШ_КЛЮЧ_GEMINI")  # aistudio.google.com/apikey
+# окружения BOT_TOKEN / GEMINI_KEY. Если их нет — используются значения ниже.
+TOKEN = os.environ.get("BOT_TOKEN", "ВАШ_ТОКЕН_ОТ_BOTFATHER").strip()
+GEMINI_API_KEY = os.environ.get("GEMINI_KEY", "ВАШ_КЛЮЧ_GEMINI").strip()  # aistudio.google.com/apikey
 
 # Только этот Telegram ID может добавлять/удалять материалы.
 # Узнать свой ID: напишите /start боту @userinfobot в Telegram.
-# Можно также задать через переменную окружения ADMIN_ID (например, на Render).
 try:
     ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))
 except ValueError:
@@ -56,9 +51,8 @@ def is_admin(user_id):
 STORE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "content_store.json")
 
 # Облачное хранение (jsonbin.io) — чтобы материалы не терялись при передеплое на Render.
-# Если переменные не заданы, используется обычный локальный файл (подходит для Pydroid).
-JSONBIN_API_KEY = os.environ.get("JSONBIN_API_KEY", "")
-JSONBIN_BIN_ID = os.environ.get("JSONBIN_BIN_ID", "")
+JSONBIN_API_KEY = os.environ.get("JSONBIN_API_KEY", "").strip()
+JSONBIN_BIN_ID = os.environ.get("JSONBIN_BIN_ID", "").strip()
 _USE_CLOUD_STORE = bool(JSONBIN_API_KEY and JSONBIN_BIN_ID)
 
 
@@ -115,20 +109,40 @@ def save_store():
 
 
 def call_gemini(question):
-    """Прямой запрос к Gemini API без сторонних библиотек (работает в Pydroid без компиляции)."""
+    """Прямой запрос к Gemini API с использованием актуальной модели gemini-1.5-flash."""
     url = (
         "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"gemini-2.5-flash-lite:generateContent?key={GEMINI_API_KEY}"
+        f"gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
     )
     prompt = f"Ты — помощник по химии. Ответь кратко, понятно и по делу: {question}"
     payload = json.dumps({
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"maxOutputTokens": 500},
+        "contents": [
+            {
+                "parts": [
+                    {"text": prompt}
+                ]
+            }
+        ],
+        "generationConfig": {
+            "maxOutputTokens": 500
+        }
     }).encode("utf-8")
-    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=20) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
-    return data["candidates"][0]["content"]["parts"][0]["text"]
+    
+    req = urllib.request.Request(
+        url, 
+        data=payload, 
+        headers={"Content-Type": "application/json"}
+    )
+    
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return data["candidates"][0]["content"]["parts"][0]["text"]
+    except urllib.error.HTTPError as e:
+        error_details = e.read().decode("utf-8")
+        raise RuntimeError(f"Ошибка API Google ({e.code}): {error_details}")
+    except Exception as e:
+        raise RuntimeError(f"Ошибка соединения или парсинга: {e}")
 
 # ========================= ТЕМЫ =========================
 
@@ -188,9 +202,7 @@ SUBSECTIONS = {"l": "📖 Лекция", "v": "🎥 Видеоурок", "z": "�
 BRANCH_NAMES = {"g": "Общая и неорганическая химия", "o": "Органическая химия"}
 BRANCH_TOPICS = {"g": GEN_TOPICS, "o": ORG_TOPICS}
 
-# ========================= КОНТЕНТ (с хранением в файле) =========================
-# Весь материал, который добавляют кнопкой "➕ Добавить" внутри бота,
-# сохраняется в content_store.json рядом с этим файлом и не теряется при перезапуске.
+# ========================= КОНТЕНТ =========================
 STORE = load_store()
 TASKS_BANK_KEY = "tasks_bank"
 
@@ -277,7 +289,6 @@ def content_key(kind, *args):
 
 
 def content_title_info(kind, *args):
-    """Возвращает (заголовок, callback для 'Назад', текст для пустой темы)."""
     if kind == "t":
         branch, sub, idx = args[0], args[1], int(args[2])
         topic = BRANCH_TOPICS[branch][idx]
@@ -302,13 +313,11 @@ def content_title_info(kind, *args):
 
 
 def get_items(key):
-    """Возвращает список (id, item) для темы. Автоматически переводит старые форматы в новый."""
     val = STORE.get(key)
     if val is None:
         return []
 
     if isinstance(val, dict) and val.get("type") == "file":
-        # старый формат: один файл без списка
         item = {"kind": "file", "file_type": val.get("file_type"), "file_id": val.get("file_id"), "caption": val.get("caption")}
         new_id = uuid.uuid4().hex[:8]
         newval = {new_id: item}
@@ -325,14 +334,12 @@ def get_items(key):
         return list(newval.items())
 
     if isinstance(val, list):
-        # промежуточный формат: список без ID
         newval = {uuid.uuid4().hex[:8]: it for it in val}
         STORE[key] = newval
         save_store()
         return list(newval.items())
 
     if isinstance(val, dict):
-        # уже в текущем формате: {id: item}
         return list(val.items())
 
     return []
@@ -372,7 +379,6 @@ def item_preview(item, maxlen=35):
 
 
 def render_content_page(kind, *args):
-    """Возвращает (текст, клавиатура) со списком всех материалов темы."""
     key = content_key(kind, *args)
     title, back_cb, empty_text = content_title_info(kind, *args)
     items = get_items(key)
@@ -404,7 +410,6 @@ def render_content_page_by_key(key):
 
 
 def render_item_page(key, item_id):
-    """Возвращает (текст, клавиатура, файл-или-None) для одного конкретного материала по его ID."""
     items = dict(get_items(key))
     if item_id not in items:
         text, kb = render_content_page_by_key(key)
@@ -443,7 +448,6 @@ async def send_item_file(context, chat_id, item):
         pass
 
 
-# Общие формулы для решения задач (реальный контент)
 FORMULAS_TEXT = (
     "📐 Общие формулы для решения задач\n\n"
     "• Количество вещества: n = m / M = V / Vm = N / Nа\n"
@@ -459,7 +463,6 @@ FORMULAS_TEXT = (
     "• Закон сохранения массы: сумма масс реагентов = сумма масс продуктов"
 )
 
-# Квиз: список (вопрос, [варианты], индекс правильного)
 QUIZ = [
     ("Сколько протонов в ядре атома углерода?", ["4", "6", "8", "12"], 1),
     ("Какой заряд у электрона?", ["+1", "0", "-1", "+2"], 2),
@@ -492,7 +495,6 @@ QUIZ = [
     ("Какая функциональная группа у спиртов?", ["-COOH", "-OH", "-CHO", "-NH2"], 1),
 ]
 
-# Продолжение реакций: (начало реакции, продукт/ответ)
 REACTIONS = [
     ("CH4 + O2 → ?", "CO2 + H2O (горение метана)"),
     ("Na + H2O → ?", "NaOH + H2 (щёлочь и водород)"),
@@ -696,8 +698,6 @@ async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def show_leaf(query, context, key):
-    """Показывает страницу темы; если перед этим был вызван /add или /delete —
-    сразу выполняет нужное действие вместо простого показа."""
     context.user_data["last_content_key"] = key
     pending = context.user_data.pop("pending_action", None)
 
@@ -729,13 +729,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
     parts = data.split(":")
 
-    # ---- главное меню ----
     if data == "main":
         context.user_data["awaiting_ai"] = False
         await query.edit_message_text("Выберите раздел:", reply_markup=main_menu_kb())
         return
 
-    # ---- ветка (общая/органическая): сразу список тем ----
     if parts[0] == "br":
         branch = parts[1]
         await query.edit_message_text(
@@ -744,7 +742,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ---- выбор типа материала внутри темы (лекция/видеоурок/тесты) ----
     if parts[0] == "tm":
         branch, idx = parts[1], int(parts[2])
         topic = BRANCH_TOPICS[branch][idx]
@@ -754,13 +751,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ---- содержимое темы (лекция/видео/задачи) ----
     if parts[0] == "tc":
         branch, sub, idx = parts[1], parts[2], parts[3]
         await show_leaf(query, context, content_key("t", branch, sub, idx))
         return
 
-    # ---- добавить / изменить материал ----
     if data.startswith("add:"):
         if not is_admin(query.from_user.id):
             await query.answer("⛔ Только администратор может добавлять материалы.", show_alert=True)
@@ -774,7 +769,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ---- вернуться к списку материалов темы ----
     if data.startswith("list:"):
         key = data[5:]
         context.user_data.pop("awaiting_content", None)
@@ -782,7 +776,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(text, reply_markup=kb)
         return
 
-    # ---- посмотреть конкретный материал из списка ----
     if data.startswith("view:"):
         key, item_id = data[5:].rsplit(":", 1)
         text, kb, file_item = render_item_page(key, item_id)
@@ -790,7 +783,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_item_file(context, query.message.chat_id, file_item)
         return
 
-    # ---- удалить конкретный материал (с подтверждением) ----
     if data.startswith("delitem:"):
         if not is_admin(query.from_user.id):
             await query.answer("⛔ Только администратор может удалять материалы.", show_alert=True)
@@ -819,7 +811,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_item_file(context, query.message.chat_id, file_item)
         return
 
-    # ---- раздел "Общее для химии" ----
     if data == "c:main":
         await query.edit_message_text("📦 Общее для химии\n\nВыберите раздел:", reply_markup=common_menu_kb())
         return
@@ -967,10 +958,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обрабатывает свободный текст: сохранение материала, вопрос к ИИ, или команды add/delete словом."""
     msg = update.message.text.strip().lower()
 
-    # ---- если ждём текст материала — сохраняем его, даже если он похож на "add"/"delete" ----
     if context.user_data.get("awaiting_content"):
         key = context.user_data.pop("awaiting_content")
         if key == "TASKS_BANK_APPEND":
@@ -983,7 +972,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("✅ Материал добавлен!\n\n" + text, reply_markup=kb)
         return
 
-    # ---- слова add/добавить и delete/удалить работают как команды /add и /delete ----
     if msg in ("add", "добавить", "добавь"):
         await add_command(update, context)
         return
@@ -1009,7 +997,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Сохраняет присланный документ (PDF, DOCX и т.д.) как материал темы."""
     if not context.user_data.get("awaiting_content"):
         return
     key = context.user_data.pop("awaiting_content")
@@ -1030,7 +1017,6 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Сохраняет присланную картинку как материал темы."""
     if not context.user_data.get("awaiting_content"):
         return
     key = context.user_data.pop("awaiting_content")
@@ -1051,7 +1037,6 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def video_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Сохраняет присланное видео как материал темы."""
     if not context.user_data.get("awaiting_content"):
         return
     key = context.user_data.pop("awaiting_content")
@@ -1078,12 +1063,10 @@ class _HealthHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"OK")
 
     def log_message(self, format, *args):
-        pass  # не засоряем логи
+        pass
 
 
 def _run_health_server():
-    """Крошечный веб-сервер, нужен только чтобы Render считал сервис 'Web Service'
-    и не усыплял его. Реальную работу делает Telegram-бот ниже."""
     port = int(os.environ.get("PORT", 8080))
     server = HTTPServer(("0.0.0.0", port), _HealthHandler)
     server.serve_forever()
@@ -1095,7 +1078,9 @@ def main():
         return
 
     if _USE_CLOUD_STORE:
-        print(f"☁ Облачное хранилище включено. Bin ID: {JSONBIN_BIN_ID}")
+        key_preview = f"{JSONBIN_API_KEY[:6]}...{JSONBIN_API_KEY[-4:]}" if len(JSONBIN_API_KEY) > 10 else "???"
+        print(f"☁ Облачное хранилище включено. Bin ID: '{JSONBIN_BIN_ID}' (длина {len(JSONBIN_BIN_ID)})")
+        print(f"☁ Ключ: {key_preview} (длина {len(JSONBIN_API_KEY)})")
     else:
         print("💾 Облачное хранилище НЕ настроено — используется локальный файл (данные пропадут при передеплое!)")
 
