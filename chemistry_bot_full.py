@@ -1,40 +1,4 @@
-# -*- coding: utf-8 -*-
-"""
-Обучающий Telegram-бот по химии — полная версия с разделами.
-
-КАК ЗАПУСТИТЬ:
-1. pip install python-telegram-bot
-   (для "Спросить у ИИ" ничего дополнительно ставить не нужно — используется
-   прямой запрос к серверу Gemini)
-2. Вставьте токен бота (от @BotFather) в TOKEN ниже.
-3. Для "Спросить у ИИ" вставьте ключ Gemini в GEMINI_API_KEY
-   (получить бесплатно: aistudio.google.com/apikey). Если ключа нет —
-   просто не трогайте, остальной бот будет работать без этого раздела.
-4. Запустите: python chemistry_bot_full.py
-"""
-
-import asyncio
-import json
-import os
-import random
-import threading
-import urllib.request
-import urllib.error
-import uuid
-from http.server import BaseHTTPRequestHandler, HTTPServer
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    CallbackQueryHandler,
-    MessageHandler,
-    filters,
-    ContextTypes,
-)
-
-# Если бот запущен на хостинге (Render и т.п.), токен и ключ берутся из переменных
-# окружения BOT_TOKEN / GEMINI_KEY. Если их нет — используются значения ниже.
-TOKEN = os.environ.get("BOT_TOKEN", "ВАШ_ТОКЕН_ОТ_BOTFATHER").strip()
+aistudio.google.com/apikey).TOKEN = os.environ.get("BOT_TOKEN", "ВАШ_ТОКЕН_ОТ_BOTFATHER").strip()
 GEMINI_API_KEY = os.environ.get("GEMINI_KEY", "ВАШ_КЛЮЧ_GEMINI").strip()  # aistudio.google.com/apikey
 
 # Только этот Telegram ID может добавлять/удалять материалы.
