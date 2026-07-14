@@ -119,7 +119,7 @@ def call_gemini(question):
     """Прямой запрос к Gemini API без сторонних библиотек (работает в Pydroid без компиляции)."""
     url = (
         "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"gemini-flash-latest:generateContent?key={GEMINI_API_KEY}"
+        f"gemini-flash-lite-latest:generateContent?key={GEMINI_API_KEY}"
     )
     prompt = (
         "Ты — помощник по химии в Telegram-боте. Ответь кратко, понятно и по делу на вопрос ниже. "
@@ -130,7 +130,10 @@ def call_gemini(question):
     )
     payload = json.dumps({
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"maxOutputTokens": 500},
+        "generationConfig": {
+            "maxOutputTokens": 300,
+            "thinkingConfig": {"thinkingBudget": 0},
+        },
     }).encode("utf-8")
     req = urllib.request.Request(
         url, data=payload,
