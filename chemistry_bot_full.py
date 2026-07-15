@@ -833,6 +833,20 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def preview_paywall_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Позволяет админу посмотреть, как выглядит экран оплаты у обычного ученика."""
+    if not is_admin(update.effective_user.id):
+        return
+    await update.message.reply_text(
+        "👀 Так это выглядит у ученика, который ещё не оплатил:\n\n"
+        "👋 Привет! Я репетитор-бот по химии.\n"
+        "Меня создал репетитор-учитель Абдусаломов Авазбек.\n"
+        "По обращению: +998916634067\n\n"
+        "🔒 Доступ к материалам платный. Выберите тариф:",
+        reply_markup=paywall_kb(),
+    )
+
+
 async def myaccess_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if is_admin(user_id):
@@ -873,7 +887,8 @@ async def grant_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(
             target_id,
             f"🎉 Оплата подтверждена! Доступ к боту открыт до {expiry.strftime('%d.%m.%Y')}.\n\n"
-            "Нажмите /start, чтобы начать пользоваться материалами.",
+            "Выберите раздел:",
+            reply_markup=main_menu_kb(),
         )
     except Exception:
         pass
@@ -973,7 +988,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             "✅ Спасибо! Я передал информацию администратору. Как только он подтвердит оплату, "
             "вам придёт уведомление и доступ откроется.\n\n"
-            f"Если возникли вопросы, пишите: {ADMIN_PHONE}"
+            "⏳ Дождитесь некоторое время. Если не хотите дождаться, позвоните администратору:\n"
+            f"{ADMIN_PHONE}"
         )
         return
 
@@ -1366,6 +1382,7 @@ def main():
     app.add_handler(CommandHandler("add", add_command))
     app.add_handler(CommandHandler("delete", delete_command))
     app.add_handler(CommandHandler("myaccess", myaccess_command))
+    app.add_handler(CommandHandler("previewpaywall", preview_paywall_command))
     app.add_handler(CommandHandler("grant", grant_command))
     app.add_handler(CommandHandler("grand", grant_command))  # алиас на случай опечатки
     app.add_handler(CallbackQueryHandler(button_handler))
