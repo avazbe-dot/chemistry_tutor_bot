@@ -130,6 +130,20 @@ def save_store():
 
 
 SUBS_KEY = "subscriptions"
+KNOWN_USERS_KEY = "known_users"
+
+
+def remember_user(user_id):
+    """Запоминает, что этот ID реально писал боту — чтобы ловить опечатки в /grant."""
+    known = STORE.get(KNOWN_USERS_KEY, [])
+    if user_id not in known:
+        known.append(user_id)
+        STORE[KNOWN_USERS_KEY] = known
+        save_store()
+
+
+def is_known_user(user_id):
+    return user_id in STORE.get(KNOWN_USERS_KEY, [])
 
 
 def get_subs():
@@ -803,6 +817,7 @@ def payment_text(plan_key):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["awaiting_ai"] = False
     user_id = update.effective_user.id
+    remember_user(user_id)
 
     if not has_access(user_id):
         await update.message.reply_text(
@@ -879,6 +894,19 @@ async def grant_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("ID и количество дней должны быть числами.")
         return
 
+    if not is_known_user(target_id):
+        await update.message.reply_text(
+            f"⚠ Внимание: ID {target_id} ни разу не писал боту (никогда не нажимал /start).\n"
+            "Похоже на опечатку — проверьте ID ещё раз в уведомлении о заявке.\n\n"
+            "Если ID точно верный (например, ученик ещё не заходил в бота), отправьте команду "
+            "ещё раз — при повторной отправке с тем же ID доступ будет открыт."
+        )
+        if context.user_data.get("_pending_grant") == (target_id, days):
+            context.user_data.pop("_pending_grant", None)
+        else:
+            context.user_data["_pending_grant"] = (target_id, days)
+            return
+
     expiry = grant_access(target_id, days)
     await update.message.reply_text(
         f"✅ Доступ открыт для пользователя {target_id} до {expiry.strftime('%d.%m.%Y %H:%M')}."
@@ -952,8 +980,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
     parts = data.split(":")
     user_id = update.effective_user.id
-
-    # ---- оплата: доступна всем, даже без подписки ----
+    remember_user(user_id)
     if data == "paywall":
         await query.edit_message_text("🔒 Выберите тариф:", reply_markup=paywall_kb())
         return
