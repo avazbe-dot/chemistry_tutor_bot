@@ -26,6 +26,7 @@ import re
 import threading
 import urllib.request
 import uuid
+from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -46,13 +47,26 @@ GEMINI_API_KEY = os.environ.get("GEMINI_KEY", "ВАШ_КЛЮЧ_GEMINI").strip() 
 # Узнать свой ID: напишите /start боту @userinfobot в Telegram.
 # Можно также задать через переменную окружения ADMIN_ID (например, на Render).
 try:
-    ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))
+    ADMIN_ID = int(os.environ.get("ADMIN_ID", "1364771293"))
 except ValueError:
-    ADMIN_ID = 0
+    ADMIN_ID = 1364771293
 
 
 def is_admin(user_id):
     return ADMIN_ID != 0 and user_id == ADMIN_ID
+
+
+# ========================= ПЛАТНЫЙ ДОСТУП =========================
+# Реквизиты карты для перевода — задаются через переменные окружения на Render,
+# либо впишите прямо сюда вместо значений по умолчанию.
+CARD_NUMBER = os.environ.get("CARD_NUMBER", "9860 0401 1880 4034").strip()
+CARD_HOLDER = os.environ.get("CARD_HOLDER", "Авазбек Абдусаломов").strip()
+ADMIN_PHONE = os.environ.get("ADMIN_PHONE", "+998916634067").strip()
+
+PLANS = {
+    "15": {"days": 15, "price": "10 000 сум"},
+    "30": {"days": 30, "price": "15 000 сум"},
+}
 
 STORE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "content_store.json")
 
@@ -113,6 +127,44 @@ def save_store():
         return
     with open(STORE_FILE, "w", encoding="utf-8") as f:
         json.dump(STORE, f, ensure_ascii=False, indent=2)
+
+
+SUBS_KEY = "subscriptions"
+
+
+def get_subs():
+    return STORE.get(SUBS_KEY, {})
+
+
+def get_sub_expiry(user_id):
+    iso = get_subs().get(str(user_id))
+    if not iso:
+        return None
+    try:
+        return datetime.fromisoformat(iso)
+    except Exception:
+        return None
+
+
+def grant_access(user_id, days):
+    """Продлевает доступ на `days` дней от текущего момента (или от конца текущей
+    подписки, если она ещё активна — так покупки складываются, а не сгорают)."""
+    now = datetime.now()
+    current = get_sub_expiry(user_id)
+    base = current if current and current > now else now
+    new_expiry = base + timedelta(days=days)
+    subs = get_subs()
+    subs[str(user_id)] = new_expiry.isoformat()
+    STORE[SUBS_KEY] = subs
+    save_store()
+    return new_expiry
+
+
+def has_access(user_id):
+    if is_admin(user_id):
+        return True
+    expiry = get_sub_expiry(user_id)
+    return bool(expiry and datetime.now() < expiry)
 
 
 def call_gemini(question):
@@ -689,10 +741,79 @@ def reaction_kb(r_idx, show_answer=False):
     return InlineKeyboardMarkup(keyboard)
 
 
+def paywall_kb():
+    keyboard = [
+        [InlineKeyboardButton("ℹ️ Чем полезен этот бот?", callback_data="about")],
+        [InlineKeyboardButton(f"💳 {PLANS['15']['days']} дней — {PLANS['15']['price']}", callback_data="pay:15")],
+        [InlineKeyboardButton(f"💳 {PLANS['30']['days']} дней — {PLANS['30']['price']}", callback_data="pay:30")],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+ABOUT_TEXT = (
+    "🧪 Чем полезен этот бот?\n\n"
+    "Даже без репетитора вы можете изучать химию — весь путь от простой темы "
+    "до сложной задачи собран в одном месте и доступен в любое время.\n\n"
+    "📖 Лекции по каждой теме — от строения атома до углеводов и жиров, "
+    "разбито по классам (7–11) и по разделам (общая, неорганическая и органическая химия)\n\n"
+    "🎥 Видеоуроки — наглядное объяснение сложных тем своими словами, без сухого текста учебника\n\n"
+    "📝 Тесты и задачи по каждой теме — чтобы сразу проверить, как усвоил материал, "
+    "а не только прочитал его\n\n"
+    "🔗 Цепочки превращений и сверхтрудные задачи — для тех, кто целится на олимпиады "
+    "и повышенный уровень сложности\n\n"
+    "🧠 Квизы — быстрая проверка знаний в игровой форме, без скуки и зубрёжки\n\n"
+    "🤖 Спроси у ИИ — если что-то непонятно, можно в любой момент задать вопрос "
+    "и получить объяснение прямо в чате, как будто рядом сидит преподаватель\n\n"
+    "📚 Материалы учебников — лекции и книги по классам, если нужен официальный источник\n\n"
+    "По сути это репетитор в кармане: занимайтесь тогда, когда удобно вам, "
+    "повторяйте сложные темы столько раз, сколько нужно, и двигайтесь в своём темпе — "
+    "без привязки к расписанию и без лишних затрат на дорогие занятия."
+)
+
+
+def about_kb():
+    keyboard = [[InlineKeyboardButton("⬅ Назад", callback_data="paywall")]]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def payment_instructions_kb(plan_key):
+    keyboard = [
+        [InlineKeyboardButton("✅ Я оплатил(а)", callback_data=f"paid:{plan_key}")],
+        [InlineKeyboardButton("⬅ Назад", callback_data="paywall")],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def payment_text(plan_key):
+    plan = PLANS[plan_key]
+    return (
+        f"💳 Тариф: {plan['days']} дней — {plan['price']}\n\n"
+        f"Переведите сумму на карту:\n"
+        f"{CARD_NUMBER}\n"
+        f"Получатель: {CARD_HOLDER}\n\n"
+        f"Если на карте нет денег — можно оплатить наличными репетитору лично "
+        f"({ADMIN_PHONE}).\n\n"
+        f"После оплаты нажмите кнопку «✅ Я оплатил(а)» ниже — администратор увидит заявку "
+        f"и откроет вам доступ."
+    )
+
+
 # ========================= ХЭНДЛЕРЫ =========================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["awaiting_ai"] = False
+    user_id = update.effective_user.id
+
+    if not has_access(user_id):
+        await update.message.reply_text(
+            "👋 Привет! Я репетитор-бот по химии.\n"
+            "Меня создал репетитор-учитель Абдусаломов Авазбек.\n"
+            "По обращению: +998916634067\n\n"
+            "🔒 Доступ к материалам платный. Выберите тариф:",
+            reply_markup=paywall_kb(),
+        )
+        return
+
     await update.message.reply_text(
         "👋 Привет! Я репетитор-бот по химии.\n"
         "Меня создал репетитор-учитель Абдусаломов Авазбек.\n"
@@ -705,9 +826,57 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Команды:\n/start — главное меню\n/help — эта справка\n"
-        "/add — добавить материал в тему, которую вы сейчас смотрите\n"
-        "/delete — удалить материал из темы, которую вы сейчас смотрите"
+        "/myaccess — проверить срок действия своей подписки\n"
+        "/add — добавить материал в тему, которую вы сейчас смотрите (только админ)\n"
+        "/delete — удалить материал из темы, которую вы сейчас смотрите (только админ)\n"
+        "/grant ID дни — открыть доступ пользователю после оплаты (только админ)"
     )
+
+
+async def myaccess_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if is_admin(user_id):
+        await update.message.reply_text("Вы администратор — доступ открыт всегда.")
+        return
+    expiry = get_sub_expiry(user_id)
+    if expiry and expiry > datetime.now():
+        await update.message.reply_text(f"✅ Ваш доступ активен до {expiry.strftime('%d.%m.%Y %H:%M')}.")
+    else:
+        await update.message.reply_text(
+            "🔒 У вас нет активной подписки. Выберите тариф:", reply_markup=paywall_kb()
+        )
+
+
+async def grant_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Админ вручную открывает доступ после получения оплаты: /grant ID дни"""
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("⛔ Эта команда доступна только администратору бота.")
+        return
+    args = context.args
+    if len(args) != 2:
+        await update.message.reply_text(
+            "Использование: /grant ID_пользователя количество_дней\nНапример: /grant 123456789 15"
+        )
+        return
+    try:
+        target_id = int(args[0])
+        days = int(args[1])
+    except ValueError:
+        await update.message.reply_text("ID и количество дней должны быть числами.")
+        return
+
+    expiry = grant_access(target_id, days)
+    await update.message.reply_text(
+        f"✅ Доступ открыт для пользователя {target_id} до {expiry.strftime('%d.%m.%Y %H:%M')}."
+    )
+    try:
+        await context.bot.send_message(
+            target_id,
+            f"🎉 Оплата подтверждена! Доступ к боту открыт до {expiry.strftime('%d.%m.%Y')}.\n\n"
+            "Нажмите /start, чтобы начать пользоваться материалами.",
+        )
+    except Exception:
+        pass
 
 
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -767,6 +936,54 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     data = query.data
     parts = data.split(":")
+    user_id = update.effective_user.id
+
+    # ---- оплата: доступна всем, даже без подписки ----
+    if data == "paywall":
+        await query.edit_message_text("🔒 Выберите тариф:", reply_markup=paywall_kb())
+        return
+
+    if data == "about":
+        await query.edit_message_text(ABOUT_TEXT, reply_markup=about_kb())
+        return
+
+    if parts[0] == "pay":
+        plan_key = parts[1]
+        await query.edit_message_text(payment_text(plan_key), reply_markup=payment_instructions_kb(plan_key))
+        return
+
+    if parts[0] == "paid":
+        plan_key = parts[1]
+        plan = PLANS[plan_key]
+        user = update.effective_user
+        username = f"@{user.username}" if user.username else "(нет username)"
+        if ADMIN_ID:
+            try:
+                await context.bot.send_message(
+                    ADMIN_ID,
+                    "💰 Новая заявка на оплату!\n\n"
+                    f"Пользователь: {user.full_name} {username}\n"
+                    f"ID: {user.id}\n"
+                    f"Тариф: {plan['days']} дней — {plan['price']}\n\n"
+                    "Чтобы открыть доступ, отправьте команду:\n"
+                    f"/grant {user.id} {plan['days']}",
+                )
+            except Exception:
+                pass
+        await query.edit_message_text(
+            "✅ Спасибо! Я передал информацию администратору. Как только он подтвердит оплату, "
+            "вам придёт уведомление и доступ откроется.\n\n"
+            f"Если возникли вопросы, пишите: {ADMIN_PHONE}"
+        )
+        return
+
+    # ---- закрываем всё остальное для тех, кто не оплатил ----
+    if not has_access(user_id):
+        await query.edit_message_text(
+            "🔒 Доступ закрыт. Оформите подписку, чтобы пользоваться ботом:",
+            reply_markup=paywall_kb(),
+        )
+        return
 
     # ---- главное меню ----
     if data == "main":
@@ -1148,6 +1365,9 @@ def main():
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("add", add_command))
     app.add_handler(CommandHandler("delete", delete_command))
+    app.add_handler(CommandHandler("myaccess", myaccess_command))
+    app.add_handler(CommandHandler("grant", grant_command))
+    app.add_handler(CommandHandler("grand", grant_command))  # алиас на случай опечатки
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.Document.ALL, document_handler))
     app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
