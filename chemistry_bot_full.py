@@ -850,28 +850,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     remember_user(user_id)
 
-    trial_granted = grant_trial_if_eligible(user_id)
-
-    if trial_granted:
-        expiry = get_sub_expiry(user_id)
-        await update.message.reply_text(
-            "👋 Привет! Я репетитор-бот по химии.\n"
-            "Меня создал репетитор-учитель Абдусаломов Авазбек.\n"
-            "По обращению: +998916634067\n\n"
-            f"🎁 Вам открыт бесплатный пробный доступ на {TRIAL_DAYS} день "
-            f"(до {expiry.strftime('%d.%m.%Y %H:%M')}). Дальше — по тарифу.\n\n"
-            "Выберите раздел:",
-            reply_markup=main_menu_kb(),
-        )
-        return
-
     if not has_access(user_id):
         await update.message.reply_text(
             "👋 Привет! Я репетитор-бот по химии.\n"
             "Меня создал репетитор-учитель Абдусаломов Авазбек.\n"
             "По обращению: +998916634067\n\n"
-            "🔒 Бесплатный пробный день уже использован. Доступ к материалам платный. "
-            "Выберите тариф:",
+            "Выберите вариант ниже:",
             reply_markup=paywall_kb(),
         )
         return
