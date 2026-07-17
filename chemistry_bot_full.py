@@ -131,6 +131,8 @@ def save_store():
 
 SUBS_KEY = "subscriptions"
 KNOWN_USERS_KEY = "known_users"
+TRIAL_USED_KEY = "trial_used"
+TRIAL_DAYS = 1  # бесплатный пробный период при первом заходе
 
 
 def remember_user(user_id):
@@ -179,6 +181,34 @@ def has_access(user_id):
         return True
     expiry = get_sub_expiry(user_id)
     return bool(expiry and datetime.now() < expiry)
+
+
+def has_used_trial(user_id):
+    return user_id in STORE.get(TRIAL_USED_KEY, [])
+
+
+def mark_trial_used(user_id):
+    used = STORE.get(TRIAL_USED_KEY, [])
+    if user_id not in used:
+        used.append(user_id)
+        STORE[TRIAL_USED_KEY] = used
+        save_store()
+
+
+def grant_trial_if_eligible(user_id):
+    """Выдаёт бесплатный пробный день один раз на пользователя.
+    Возвращает True, если пробный доступ был выдан именно сейчас."""
+    if is_admin(user_id):
+        return False
+    if has_used_trial(user_id):
+        return False
+    if get_sub_expiry(user_id) is not None:
+        # у пользователя уже была/есть платная подписка — пробный день не положен
+        mark_trial_used(user_id)
+        return False
+    grant_access(user_id, TRIAL_DAYS)
+    mark_trial_used(user_id)
+    return True
 
 
 def call_gemini(question):
@@ -819,12 +849,28 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     remember_user(user_id)
 
+    trial_granted = grant_trial_if_eligible(user_id)
+
+    if trial_granted:
+        expiry = get_sub_expiry(user_id)
+        await update.message.reply_text(
+            "👋 Привет! Я репетитор-бот по химии.\n"
+            "Меня создал репетитор-учитель Абдусаломов Авазбек.\n"
+            "По обращению: +998916634067\n\n"
+            f"🎁 Вам открыт бесплатный пробный доступ на {TRIAL_DAYS} день "
+            f"(до {expiry.strftime('%d.%m.%Y %H:%M')}). Дальше — по тарифу.\n\n"
+            "Выберите раздел:",
+            reply_markup=main_menu_kb(),
+        )
+        return
+
     if not has_access(user_id):
         await update.message.reply_text(
             "👋 Привет! Я репетитор-бот по химии.\n"
             "Меня создал репетитор-учитель Абдусаломов Авазбек.\n"
             "По обращению: +998916634067\n\n"
-            "🔒 Доступ к материалам платный. Выберите тариф:",
+            "🔒 Бесплатный пробный день уже использован. Доступ к материалам платный. "
+            "Выберите тариф:",
             reply_markup=paywall_kb(),
         )
         return
