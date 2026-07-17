@@ -787,6 +787,7 @@ def reaction_kb(r_idx, show_answer=False):
 
 def paywall_kb():
     keyboard = [
+        [InlineKeyboardButton("🎁 Бесплатный пробный — 1 день", callback_data="trial")],
         [InlineKeyboardButton("ℹ️ Чем полезен этот бот?", callback_data="about")],
         [InlineKeyboardButton(f"💳 {PLANS['15']['days']} дней — {PLANS['15']['price']}", callback_data="pay:15")],
         [InlineKeyboardButton(f"💳 {PLANS['30']['days']} дней — {PLANS['30']['price']}", callback_data="pay:30")],
@@ -1029,6 +1030,25 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     remember_user(user_id)
     if data == "paywall":
         await query.edit_message_text("🔒 Выберите тариф:", reply_markup=paywall_kb())
+        return
+
+    if data == "trial":
+        if has_access(user_id):
+            await query.edit_message_text("Выберите раздел:", reply_markup=main_menu_kb())
+            return
+        if grant_trial_if_eligible(user_id):
+            expiry = get_sub_expiry(user_id)
+            await query.edit_message_text(
+                f"🎁 Готово! Вам открыт бесплатный пробный доступ на {TRIAL_DAYS} день "
+                f"(до {expiry.strftime('%d.%m.%Y %H:%M')}). Дальше — по тарифу.\n\n"
+                "Выберите раздел:",
+                reply_markup=main_menu_kb(),
+            )
+        else:
+            await query.edit_message_text(
+                "🔒 Бесплатный пробный день уже использован. Выберите тариф:",
+                reply_markup=paywall_kb(),
+            )
         return
 
     if data == "about":
