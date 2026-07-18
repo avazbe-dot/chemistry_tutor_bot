@@ -62,6 +62,7 @@ def is_admin(user_id):
 CARD_NUMBER = os.environ.get("CARD_NUMBER", "9860 0401 1880 4034").strip()
 CARD_HOLDER = os.environ.get("CARD_HOLDER", "Авазбек Абдусаломов").strip()
 ADMIN_PHONE = os.environ.get("ADMIN_PHONE", "+998916634067").strip()
+ADMIN_TELEGRAM = os.environ.get("ADMIN_TELEGRAM", "@Pro916634067").strip()
 
 PLANS = {
     "15": {"days": 15, "price": "10 000 сум"},
@@ -791,6 +792,7 @@ def paywall_kb():
         [InlineKeyboardButton("ℹ️ Чем полезен этот бот?", callback_data="about")],
         [InlineKeyboardButton(f"💳 {PLANS['15']['days']} дней — {PLANS['15']['price']}", callback_data="pay:15")],
         [InlineKeyboardButton(f"💳 {PLANS['30']['days']} дней — {PLANS['30']['price']}", callback_data="pay:30")],
+        [InlineKeyboardButton("💵 Оплата наличными", callback_data="cash")],
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -827,6 +829,18 @@ def payment_instructions_kb(plan_key):
         [InlineKeyboardButton("⬅ Назад", callback_data="paywall")],
     ]
     return InlineKeyboardMarkup(keyboard)
+
+
+def cash_kb():
+    keyboard = [[InlineKeyboardButton("⬅ Назад", callback_data="paywall")]]
+    return InlineKeyboardMarkup(keyboard)
+
+
+CASH_TEXT = (
+    "💵 Оплата наличными\n\n"
+    f"Вы можете позвонить администратору: {ADMIN_PHONE}\n\n"
+    f"Или написать в Telegram лично: {ADMIN_TELEGRAM}"
+)
 
 
 def payment_text(plan_key):
@@ -1037,6 +1051,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "about":
         await query.edit_message_text(ABOUT_TEXT, reply_markup=about_kb())
+        return
+
+    if data == "cash":
+        await query.edit_message_text(CASH_TEXT, reply_markup=cash_kb())
         return
 
     if parts[0] == "pay":
