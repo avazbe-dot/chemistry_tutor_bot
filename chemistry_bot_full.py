@@ -20,6 +20,7 @@
 
 import asyncio
 import json
+import logging
 import os
 import random
 import re
@@ -29,6 +30,7 @@ import uuid
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import BadRequest, TelegramError
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -1021,7 +1023,13 @@ async def show_leaf(query, context, key):
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
+    try:
+        await query.answer()
+    except BadRequest as e:
+        # Кнопка "протухла" (пользователь нажал слишком поздно, например бот
+        # только что проснулся после сна на Render). Не даём этому уронить бота.
+        logging.warning(f"Не удалось ответить на callback (протух?): {e}")
+        return
     data = query.data
     parts = data.split(":")
     user_id = update.effective_user.id
@@ -1448,6 +1456,12 @@ class _HealthHandler(BaseHTTPRequestHandler):
         pass  # не засоряем логи
 
 
+async def global_error_handler(update, context: ContextTypes.DEFAULT_TYPE):
+    """Ловит любые необработанные исключения, чтобы одна ошибка не роняла
+    весь процесс бота (иначе Render перезапускает его заново, а это долго)."""
+    logging.error(f"Необработанная ошибка: {context.error}", exc_info=context.error)
+
+
 def _run_health_server():
     """Крошечный веб-сервер, нужен только чтобы Render считал сервис 'Web Service'
     и не усыплял его. Реальную работу делает Telegram-бот ниже."""
@@ -1485,6 +1499,7 @@ def main():
     app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
     app.add_handler(MessageHandler(filters.VIDEO, video_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
+    app.add_error_handler(global_error_handler)
 
     print("Бот запущен! Нажмите Ctrl+C, чтобы остановить.")
     app.run_polling()
