@@ -215,12 +215,22 @@ def grant_trial_if_eligible(user_id):
     return True
 
 
+# Список моделей Gemini, которые бот пробует по очереди (см. call_gemini).
+# Порядок важен: сначала быстрые/дешёвые lite-модели, затем обычный Flash как
+# более "умный", но и более дорогой запасной вариант.
+GEMINI_MODELS_TO_TRY = [
+    "gemini-3.5-flash-lite",
+    "gemini-flash-lite-latest",
+    "gemini-2.5-flash",
+    "gemini-3.5-flash",
+]
+
+
 def call_gemini(question):
-    """Прямой запрос к Gemini API без сторонних библиотек (работает в Pydroid без компиляции)."""
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"gemini-2.5-flash-lite:generateContent?key={GEMINI_API_KEY}"
-    )
+    """Прямой запрос к Gemini API без сторонних библиотек (работает в Pydroid без компиляции).
+    Google периодически отключает старые модели Flash-Lite — поэтому пробуем по очереди
+    несколько актуальных моделей: если одна вернёт «модель не найдена», пробуем следующую."""
+
     prompt = (
         "Ты — помощник по химии в Telegram-боте для школьников. Ответь понятно, по делу и "
         "ДО КОНЦА на вопрос ниже — не обрывай ответ на середине мысли или уравнения. "
@@ -231,12 +241,73 @@ def call_gemini(question):
         "например C6H5OH, H2SO4, CH3COOH.\n\n"
         f"Вопрос: {question}"
     )
+
+    last_error = None
+    for model_name in GEMINI_MODELS_TO_TRY:
+        url = (
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{model_name}:generateContent?key={GEMINI_API_KEY}"
+        )
+        payload = json.dumps({
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "maxOutputTokens": 1024,
+                "thinkingConfig": {"thinkingLevel": "low"},
+            },
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            url, data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": "Mozilla/5.0 (compatible; ChemistryBot/1.0)",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=45) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            body = ""
+            try:
+                body = e.read().decode("utf-8")[:300]
+            except Exception:
+                pass
+            last_error = RuntimeError(f"Gemini API вернул ошибку {e.code} для модели {model_name}: {body}")
+            # 404/NOT_FOUND — модель отключена, пробуем следующую из списка.
+            # Другие ошибки (например неверный ключ) не зависят от модели — прекращаем сразу.
+            if e.code == 404:
+                continue
+            raise last_error
+
+        candidates = data.get("candidates") or []
+        if not candidates:
+            feedback = data.get("promptFeedback", {})
+            reason = feedback.get("blockReason", "неизвестна")
+            last_error = RuntimeError(f"Gemini не вернул ответ (возможно, вопрос заблокирован фильтром). Причина: {reason}")
+            raise last_error
+
+        parts = candidates[0].get("content", {}).get("parts")
+        if not parts:
+            finish_reason = candidates[0].get("finishReason", "неизвестна")
+            last_error = RuntimeError(f"Gemini вернул пустой ответ. Причина: {finish_reason}")
+            raise last_error
+
+        text = parts[0].get("text", "").strip() or "(пустой ответ от ИИ)"
+        return clean_ai_text(text)
+
+    # все модели из списка вернули 404 — сообщаем об этом понятно
+    raise last_error or RuntimeError("Не удалось найти рабочую модель Gemini.")
+
+
+def _test_one_gemini_model(model_name, timeout=25):
+    """Делает минимальный тестовый запрос к одной конкретной модели Gemini и
+    возвращает (успех: bool, короткое сообщение: str). Используется командой /testai."""
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{model_name}:generateContent?key={GEMINI_API_KEY}"
+    )
     payload = json.dumps({
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "maxOutputTokens": 1024,
-            "thinkingConfig": {"thinkingBudget": 0},
-        },
+        "contents": [{"parts": [{"text": "Напиши одно слово: привет"}]}],
+        "generationConfig": {"maxOutputTokens": 50},
     }).encode("utf-8")
     req = urllib.request.Request(
         url, data=payload,
@@ -246,29 +317,22 @@ def call_gemini(question):
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=45) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         body = ""
         try:
-            body = e.read().decode("utf-8")[:300]
+            body = e.read().decode("utf-8")[:150]
         except Exception:
             pass
-        raise RuntimeError(f"Gemini API вернул ошибку {e.code}: {body}") from e
+        return False, f"HTTP {e.code}: {body}"
+    except Exception as e:
+        return False, f"{type(e).__name__}: {e}"
 
     candidates = data.get("candidates") or []
-    if not candidates:
-        feedback = data.get("promptFeedback", {})
-        reason = feedback.get("blockReason", "неизвестна")
-        raise RuntimeError(f"Gemini не вернул ответ (возможно, вопрос заблокирован фильтром). Причина: {reason}")
-
-    parts = candidates[0].get("content", {}).get("parts")
-    if not parts:
-        finish_reason = candidates[0].get("finishReason", "неизвестна")
-        raise RuntimeError(f"Gemini вернул пустой ответ. Причина: {finish_reason}")
-
-    text = parts[0].get("text", "").strip() or "(пустой ответ от ИИ)"
-    return clean_ai_text(text)
+    if not candidates or not candidates[0].get("content", {}).get("parts"):
+        return False, "пустой ответ от модели"
+    return True, "отвечает нормально"
 
 
 def clean_ai_text(text):
@@ -901,6 +965,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Команды:\n/start — главное меню\n/help — эта справка\n"
         "/myaccess — проверить срок действия своей подписки\n"
+        "/testai — проверить, какие модели Gemini сейчас отвечают (только админ)\n"
         "/add — добавить материал в тему, которую вы сейчас смотрите (только админ)\n"
         "/delete — удалить материал из темы, которую вы сейчас смотрите (только админ)\n"
         "/grant ID дни — открыть доступ пользователю после оплаты (только админ)"
@@ -919,6 +984,32 @@ async def preview_paywall_command(update: Update, context: ContextTypes.DEFAULT_
         "🔒 Доступ к материалам платный. Выберите тариф:",
         reply_markup=paywall_kb(),
     )
+
+
+async def testai_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Только для админа: проверяет по очереди все модели Gemini из списка и
+    показывает, какая из них реально отвечает с текущим GEMINI_API_KEY."""
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("⛔ Эта команда доступна только администратору бота.")
+        return
+    if GEMINI_API_KEY in ("", "ВАШ_КЛЮЧ_GEMINI"):
+        await update.message.reply_text("⚠ GEMINI_API_KEY не задан — сначала вставьте ключ.")
+        return
+
+    msg = await update.message.reply_text(
+        f"🔎 Проверяю {len(GEMINI_MODELS_TO_TRY)} моделей, это может занять до минуты…"
+    )
+    lines = []
+    for model_name in GEMINI_MODELS_TO_TRY:
+        ok, info = await asyncio.to_thread(_test_one_gemini_model, model_name)
+        lines.append(f"{'✅' if ok else '❌'} {model_name} — {info}")
+
+    working = [l for l in lines if l.startswith("✅")]
+    summary = (
+        "🤖 Первая рабочая модель из списка (её и использует бот сейчас): "
+        + (working[0].split(" — ")[0][2:].strip() if working else "ни одна не отвечает ⚠")
+    )
+    await msg.edit_text("Результат проверки:\n\n" + "\n".join(lines) + "\n\n" + summary)
 
 
 async def myaccess_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1541,6 +1632,7 @@ def main():
     app.add_handler(CommandHandler("add", add_command))
     app.add_handler(CommandHandler("delete", delete_command))
     app.add_handler(CommandHandler("myaccess", myaccess_command))
+    app.add_handler(CommandHandler("testai", testai_command))
     app.add_handler(CommandHandler("previewpaywall", preview_paywall_command))
     app.add_handler(CommandHandler("grant", grant_command))
     app.add_handler(CommandHandler("grand", grant_command))  # алиас на случай опечатки
