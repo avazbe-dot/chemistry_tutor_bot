@@ -25,6 +25,7 @@ import os
 import random
 import re
 import threading
+import urllib.error
 import urllib.request
 import uuid
 from datetime import datetime, timedelta
@@ -218,10 +219,13 @@ def call_gemini(question):
     """Прямой запрос к Gemini API без сторонних библиотек (работает в Pydroid без компиляции)."""
     url = (
         "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"gemini-flash-lite-latest:generateContent?key={GEMINI_API_KEY}"
+        f"gemini-2.5-flash-lite:generateContent?key={GEMINI_API_KEY}"
     )
     prompt = (
-        "Ты — помощник по химии в Telegram-боте. Ответь кратко, понятно и по делу на вопрос ниже. "
+        "Ты — помощник по химии в Telegram-боте для школьников. Ответь понятно, по делу и "
+        "ДО КОНЦА на вопрос ниже — не обрывай ответ на середине мысли или уравнения. "
+        "Если вопрос простой — ответь в 3-6 предложениях. Если нужно решить задачу или "
+        "разобрать уравнение реакции — распиши все шаги полностью, но без лишней воды. "
         "ВАЖНО: пиши обычным простым текстом, без LaTeX ($...$, \\text{}, \\frac и т.д.) и без markdown-разметки "
         "(**жирный**, # заголовки). Химические формулы пиши как обычный текст с обычными цифрами, "
         "например C6H5OH, H2SO4, CH3COOH.\n\n"
@@ -230,7 +234,7 @@ def call_gemini(question):
     payload = json.dumps({
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
-            "maxOutputTokens": 300,
+            "maxOutputTokens": 1024,
             "thinkingConfig": {"thinkingBudget": 0},
         },
     }).encode("utf-8")
@@ -241,8 +245,16 @@ def call_gemini(question):
             "User-Agent": "Mozilla/5.0 (compatible; ChemistryBot/1.0)",
         },
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(req, timeout=45) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode("utf-8")[:300]
+        except Exception:
+            pass
+        raise RuntimeError(f"Gemini API вернул ошибку {e.code}: {body}") from e
 
     candidates = data.get("candidates") or []
     if not candidates:
@@ -1344,6 +1356,20 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обрабатывает свободный текст: сохранение материала, вопрос к ИИ, или команды add/delete словом."""
     msg = update.message.text.strip().lower()
+    user_id = update.effective_user.id
+    remember_user(user_id)
+
+    # ---- доступ мог закончиться (или никогда толком не проверялся — например,
+    # у пользователей ещё с бесплатных времён) — перекрываем ДО обработки
+    # ожидающих флагов, иначе "Спросить у ИИ"/добавление материала работают в обход оплаты ----
+    if not is_admin(user_id) and not has_access(user_id):
+        context.user_data["awaiting_ai"] = False
+        context.user_data.pop("awaiting_content", None)
+        await update.message.reply_text(
+            "🔒 Доступ закрыт. Оформите подписку, чтобы пользоваться ботом:",
+            reply_markup=paywall_kb(),
+        )
+        return
 
     # ---- если ждём текст материала — сохраняем его, даже если он похож на "add"/"delete" ----
     if context.user_data.get("awaiting_content"):
@@ -1387,6 +1413,14 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Сохраняет присланный документ (PDF, DOCX и т.д.) как материал темы."""
     if not context.user_data.get("awaiting_content"):
         return
+    user_id = update.effective_user.id
+    if not is_admin(user_id) and not has_access(user_id):
+        context.user_data.pop("awaiting_content", None)
+        await update.message.reply_text(
+            "🔒 Доступ закрыт. Оформите подписку, чтобы пользоваться ботом:",
+            reply_markup=paywall_kb(),
+        )
+        return
     key = context.user_data.pop("awaiting_content")
     if key == "TASKS_BANK_APPEND":
         await update.message.reply_text(
@@ -1408,6 +1442,14 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Сохраняет присланную картинку как материал темы."""
     if not context.user_data.get("awaiting_content"):
         return
+    user_id = update.effective_user.id
+    if not is_admin(user_id) and not has_access(user_id):
+        context.user_data.pop("awaiting_content", None)
+        await update.message.reply_text(
+            "🔒 Доступ закрыт. Оформите подписку, чтобы пользоваться ботом:",
+            reply_markup=paywall_kb(),
+        )
+        return
     key = context.user_data.pop("awaiting_content")
     if key == "TASKS_BANK_APPEND":
         await update.message.reply_text(
@@ -1428,6 +1470,14 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def video_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Сохраняет присланное видео как материал темы."""
     if not context.user_data.get("awaiting_content"):
+        return
+    user_id = update.effective_user.id
+    if not is_admin(user_id) and not has_access(user_id):
+        context.user_data.pop("awaiting_content", None)
+        await update.message.reply_text(
+            "🔒 Доступ закрыт. Оформите подписку, чтобы пользоваться ботом:",
+            reply_markup=paywall_kb(),
+        )
         return
     key = context.user_data.pop("awaiting_content")
     if key == "TASKS_BANK_APPEND":
