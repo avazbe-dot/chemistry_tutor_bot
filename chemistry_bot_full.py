@@ -187,6 +187,29 @@ def has_access(user_id):
     return bool(expiry and datetime.now() < expiry)
 
 
+def access_status_line(user_id):
+    """Короткая строка про остаток подписки — добавляется в шапку разделов,
+    чтобы ученик всегда видел, сколько у него осталось платного доступа."""
+    if is_admin(user_id):
+        return "👑 Вы администратор — доступ открыт всегда."
+    expiry = get_sub_expiry(user_id)
+    if not expiry:
+        return ""
+    now = datetime.now()
+    if now >= expiry:
+        return ""
+    remaining = expiry - now
+    days = remaining.days
+    hours = remaining.seconds // 3600
+    if days >= 1:
+        left = f"{days} дн."
+    elif hours >= 1:
+        left = f"{hours} ч."
+    else:
+        left = "меньше часа"
+    return f"⏳ Доступ активен до {expiry.strftime('%d.%m.%Y %H:%M')} (осталось {left})"
+
+
 def has_used_trial(user_id):
     return user_id in STORE.get(TRIAL_USED_KEY, [])
 
@@ -952,10 +975,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    status = access_status_line(user_id)
+    status_block = f"\n\n{status}" if status else ""
     await update.message.reply_text(
         "👋 Привет! Я репетитор-бот по химии.\n"
         "Меня создал репетитор-учитель Абдусаломов Авазбек.\n"
-        "По обращению: +998916634067\n\n"
+        "По обращению: +998916634067"
+        f"{status_block}\n\n"
         "Выберите раздел:",
         reply_markup=main_menu_kb(),
     )
@@ -1126,16 +1152,36 @@ async def show_leaf(query, context, key):
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    user_id = update.effective_user.id
     try:
         await query.answer()
     except BadRequest as e:
         # Кнопка "протухла" (пользователь нажал слишком поздно, например бот
-        # только что проснулся после сна на Render). Не даём этому уронить бота.
+        # только что проснулся после сна на Render, или прошло много времени).
+        # Вместо того чтобы молчать, сразу присылаем свежее меню — как будто
+        # пользователь заново нажал /start — чтобы он мог продолжить работу.
         logging.warning(f"Не удалось ответить на callback (протух?): {e}")
+        remember_user(user_id)
+        try:
+            status = access_status_line(user_id)
+            status_block = f"{status}\n\n" if status else ""
+            if has_access(user_id):
+                await context.bot.send_message(
+                    query.message.chat_id,
+                    f"⏱ Бот продолжает работу.\n\n{status_block}Выберите раздел:",
+                    reply_markup=main_menu_kb(),
+                )
+            else:
+                await context.bot.send_message(
+                    query.message.chat_id,
+                    "⏱ Бот продолжает работу.\n\n🔒 Выберите тариф:",
+                    reply_markup=paywall_kb(),
+                )
+        except Exception as inner_e:
+            logging.warning(f"Не удалось отправить новое меню после протухшей кнопки: {inner_e}")
         return
     data = query.data
     parts = data.split(":")
-    user_id = update.effective_user.id
     remember_user(user_id)
     if data == "paywall":
         await query.edit_message_text("🔒 Выберите тариф:", reply_markup=paywall_kb())
@@ -1207,17 +1253,21 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # строка "осталось N дней" — добавляется в шапку основных разделов ниже
+    status = access_status_line(user_id)
+    status_block = f"{status}\n\n" if status else ""
+
     # ---- главное меню ----
     if data == "main":
         context.user_data["awaiting_ai"] = False
-        await query.edit_message_text("Выберите раздел:", reply_markup=main_menu_kb())
+        await query.edit_message_text(f"{status_block}Выберите раздел:", reply_markup=main_menu_kb())
         return
 
     # ---- ветка (общая/органическая): сразу список тем ----
     if parts[0] == "br":
         branch = parts[1]
         await query.edit_message_text(
-            f"{BRANCH_NAMES[branch]}\n\nВыберите тему:",
+            f"{status_block}{BRANCH_NAMES[branch]}\n\nВыберите тему:",
             reply_markup=topic_menu_kb(branch),
         )
         return
@@ -1299,11 +1349,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ---- раздел "Общее для химии" ----
     if data == "c:main":
-        await query.edit_message_text("📦 Общее для химии\n\nВыберите раздел:", reply_markup=common_menu_kb())
+        await query.edit_message_text(f"{status_block}📦 Общее для химии\n\nВыберите раздел:", reply_markup=common_menu_kb())
         return
 
     if data == "c:tb":
-        await query.edit_message_text("📚 Учебники и другие книги\n\nВыберите класс:", reply_markup=grades_kb())
+        await query.edit_message_text(f"{status_block}📚 Учебники и другие книги\n\nВыберите класс:", reply_markup=grades_kb())
         return
 
     if parts[0] == "c" and parts[1] == "tbg":
@@ -1312,7 +1362,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "c:tbl":
-        await query.edit_message_text("📖 Лекции учебников\n\nВыберите класс:", reply_markup=grades_lectures_kb())
+        await query.edit_message_text(f"{status_block}📖 Лекции учебников\n\nВыберите класс:", reply_markup=grades_lectures_kb())
         return
 
     if parts[0] == "c" and parts[1] == "tblg":
@@ -1321,7 +1371,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "c:cp":
-        await query.edit_message_text("🔗 Цепные задачи\n\nВыберите раздел химии:", reply_markup=chain_branch_kb())
+        await query.edit_message_text(f"{status_block}🔗 Цепные задачи\n\nВыберите раздел химии:", reply_markup=chain_branch_kb())
         return
 
     if parts[0] == "c" and parts[1] == "cpl":
@@ -1348,14 +1398,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "c:ai":
         context.user_data["awaiting_ai"] = True
         await query.edit_message_text(
-            "🤖 Спросите меня о чём угодно по химии — просто напишите вопрос сообщением.",
+            f"{status_block}🤖 Спросите меня о чём угодно по химии — просто напишите вопрос сообщением.",
             reply_markup=back_kb("c:main"),
         )
         return
 
     if data == "c:games":
         context.user_data["awaiting_ai"] = False
-        await query.edit_message_text("🎮 Игры для развития\n\nВыберите игру:", reply_markup=games_menu_kb())
+        await query.edit_message_text(f"{status_block}🎮 Игры для развития\n\nВыберите игру:", reply_markup=games_menu_kb())
         return
 
     if data == "c:g:tasks":
