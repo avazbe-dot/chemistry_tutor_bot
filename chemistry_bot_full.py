@@ -427,6 +427,9 @@ ORG_TOPICS = [
 
 GRADES = ["7 класс", "8 класс", "9 класс", "10 класс", "11 класс", "Другие"]
 
+# Строка поддержки — добавляется в конец текста каждого раздела бота.
+SUPPORT_LINE = "☎️ Если с ботом что-то не так, звоните: +998916634067"
+
 SUBSECTIONS = {"l": "📖 Лекция", "v": "🎥 Видеоурок", "z": "📝 Тесты"}
 BRANCH_NAMES = {"g": "Общая и неорганическая химия", "o": "Органическая химия"}
 BRANCH_TOPICS = {"g": GEN_TOPICS, "o": ORG_TOPICS}
@@ -512,6 +515,7 @@ def render_task_card():
             [InlineKeyboardButton("➕ Добавить свою", callback_data="task:add")],
             [InlineKeyboardButton("⬅ Назад", callback_data="c:games")],
         ]
+    text = text + "\n\n" + SUPPORT_LINE
     return text, InlineKeyboardMarkup(keyboard)
 
 
@@ -638,6 +642,8 @@ def render_content_page(kind, *args):
     if kind == "formulas":
         text = FORMULAS_TEXT + "\n\n" + "─" * 20 + "\n\n" + text
 
+    text = text + "\n\n" + SUPPORT_LINE
+
     return text, InlineKeyboardMarkup(buttons)
 
 
@@ -668,6 +674,7 @@ def render_item_page(key, item_id):
         [InlineKeyboardButton("🗑 Удалить этот", callback_data=f"delitem:{key}:{item_id}")],
         [InlineKeyboardButton("⬅ К списку", callback_data=f"list:{key}")],
     ]
+    text = text + "\n\n" + SUPPORT_LINE
     return text, InlineKeyboardMarkup(buttons), file_item
 
 
