@@ -345,15 +345,19 @@ def call_gemini_with_image(question):
 
     prompt = (
         "Ты — помощник по химии в Telegram-боте для школьников. Ответь на вопрос ниже.\n\n"
-        "ВАЖНО ПРО РИСУНОК: если вопрос про химическую реакцию, уравнение реакции, "
-        "качественную реакцию, изменение цвета раствора/осадка/индикатора, строение молекулы "
-        "или про что-то, что нагляднее показать картинкой — ОБЯЗАТЕЛЬНО нарисуй понятную, "
-        "аккуратную схему или рисунок в дополнение к текстовому ответу. Подписывай на рисунке "
-        "вещества и, если в реакции реально меняется цвет (например, выпадает цветной осадок, "
-        "раствор окрашивается, меняется цвет индикатора) — используй на рисунке ИМЕННО ЭТИ "
-        "РЕАЛЬНЫЕ ЦВЕТА, чтобы ученик увидел, как это выглядит на самом деле.\n\n"
-        "Если вопрос простой (определение термина, короткий факт, расчёт в 1-2 действия) и "
-        "рисунок не добавляет пользы — рисунок не нужен, ответь только текстом.\n\n"
+        "ВАЖНО ПРО РИСУНОК: если вопрос про ЛЮБУЮ химическую реакцию (уравнение реакции, "
+        "взаимодействие веществ, качественную реакцию, ОВР, реакцию обмена/нейтрализации и т.д.) "
+        "— ОБЯЗАТЕЛЬНО нарисуй понятную, аккуратную схему реакции в дополнение к текстовому "
+        "ответу, даже если реакция кажется 'обычной'. Также рисуй схему, если вопрос про строение "
+        "молекулы или про что-то, что нагляднее показать картинкой. Подписывай на рисунке все "
+        "вещества (формулами). Раскрашивай рисунок реалистичными цветами: цвет исходных растворов, "
+        "цвет осадка (если он выпадает), цвет газа/пламени (если есть), изменение цвета индикатора "
+        "— то есть показывай ИМЕННО ТЕ РЕАЛЬНЫЕ ЦВЕТА, которые были бы видны в этой реакции на "
+        "самом деле (например: белый осадок BaSO4, бурый осадок Fe(OH)3, синий раствор CuSO4, "
+        "фиолетовая окраска фенолфталеина в щёлочи и т.п.). Если вещества и продукты бесцветны — "
+        "рисуй их как прозрачные/бесцветные растворы, но схему реакции всё равно нарисуй.\n\n"
+        "Если вопрос НЕ про реакцию, а простой (определение термина, формула вещества, короткий "
+        "факт, расчёт в 1-2 действия) — рисунок не нужен, ответь только текстом.\n\n"
         "Текстовую часть ответа делай по тем же правилам:\n"
         "1) ПРОСТОЙ вопрос — ответь МАКСИМАЛЬНО КОРОТКО: 1-3 предложения, только суть, без "
         "длинных вступлений.\n"
@@ -428,12 +432,15 @@ def call_gemini_with_image(question):
                     image_bytes = None
 
         text = clean_ai_text("\n".join(text_chunks).strip()) or ("(рисунок к ответу)" if image_bytes else "(пустой ответ от ИИ)")
-        return text, image_bytes
+        return text, image_bytes, None
 
-    # если ни одна image-модель не сработала (например, все вернули 404) —
-    # пробуем обычную текстовую модель, чтобы пользователь хотя бы получил ответ без рисунка
+    # если ни одна image-модель не сработала (например, обе вернули 404/429) —
+    # логируем настоящую причину (видна в логах Render) и пробуем обычную текстовую
+    # модель, чтобы пользователь хотя бы получил ответ без рисунка
+    logging.warning(f"Генерация рисунка не удалась, отвечаю только текстом. Причина: {last_error}")
     try:
-        return call_gemini(question), None
+        fallback_text = call_gemini(question)
+        return fallback_text, None, str(last_error) if last_error else None
     except Exception:
         raise last_error or RuntimeError("Не удалось найти рабочую модель Gemini с поддержкой изображений.")
 
@@ -1520,10 +1527,30 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "c:ai":
-        context.user_data["awaiting_ai"] = True
+        context.user_data["awaiting_ai"] = False
+        ai_mode_kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📷 Ответ с рисунком", callback_data="c:ai:photo")],
+            [InlineKeyboardButton("📝 Только текст", callback_data="c:ai:text")],
+            [InlineKeyboardButton("⬅ Назад", callback_data="c:main")],
+        ])
         await query.edit_message_text(
-            f"{status_block}🤖 Спросите меня о чём угодно по химии — просто напишите вопрос сообщением.",
-            reply_markup=back_kb("c:main"),
+            f"{status_block}🤖 Спросите меня о чём угодно по химии.\n\n"
+            "Как ответить — с рисунком (для реакций и т.п.) или просто текстом?",
+            reply_markup=ai_mode_kb,
+        )
+        return
+
+    if data in ("c:ai:photo", "c:ai:text"):
+        context.user_data["awaiting_ai"] = True
+        context.user_data["ai_mode"] = "photo" if data == "c:ai:photo" else "text"
+        hint = (
+            "Пришлю текст и, если вопрос про реакцию — рисунок с реальными цветами."
+            if data == "c:ai:photo"
+            else "Отвечу только текстом, без рисунка — так быстрее."
+        )
+        await query.edit_message_text(
+            f"{status_block}🤖 {hint}\n\nНапишите вопрос сообщением.",
+            reply_markup=back_kb("c:ai"),
         )
         return
 
@@ -1660,19 +1687,34 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if context.user_data.get("awaiting_ai"):
         question = update.message.text
-        thinking_msg = await update.message.reply_text("🤖 Думаю и рисую, если нужно...")
+        ai_mode = context.user_data.get("ai_mode", "photo")
+        thinking_msg = await update.message.reply_text(
+            "🤖 Думаю и рисую..." if ai_mode == "photo" else "🤖 Думаю..."
+        )
         try:
-            answer, image_bytes = await asyncio.to_thread(call_gemini_with_image, question)
-            if image_bytes:
-                # Если рисунок есть — отправляем его с подписью (Telegram ограничивает
-                # подпись к фото ~1024 символами), а длинный текст досылаем отдельным
-                # сообщением, чтобы ничего не обрезалось.
-                caption = answer if len(answer) <= 1000 else answer[:1000] + "…"
-                await update.message.reply_photo(photo=io.BytesIO(image_bytes), caption=caption)
-                if len(answer) > 1000:
-                    await update.message.reply_text(answer)
-            else:
+            if ai_mode == "text":
+                # Режим "Только текст" — сразу текстовая модель, без обращения к
+                # image-моделям (быстрее и не зависит от их квоты).
+                answer = await asyncio.to_thread(call_gemini, question)
                 await update.message.reply_text(answer)
+            else:
+                answer, image_bytes, image_error = await asyncio.to_thread(call_gemini_with_image, question)
+                if image_bytes:
+                    # Если рисунок есть — отправляем его с подписью (Telegram ограничивает
+                    # подпись к фото ~1024 символами), а длинный текст досылаем отдельным
+                    # сообщением, чтобы ничего не обрезалось.
+                    caption = answer if len(answer) <= 1000 else answer[:1000] + "…"
+                    await update.message.reply_photo(photo=io.BytesIO(image_bytes), caption=caption)
+                    if len(answer) > 1000:
+                        await update.message.reply_text(answer)
+                else:
+                    # Рисунок не получился — честно говорим об этом (не только админу),
+                    # раз пользователь сам выбрал режим "с рисунком", плюс даём текстовый ответ.
+                    if image_error:
+                        await update.message.reply_text("⚠ Не получилось нарисовать картинку сейчас (возможно, закончился лимит ИИ на рисунки) — вот ответ текстом:")
+                    await update.message.reply_text(answer)
+                    if image_error and is_admin(user_id):
+                        await update.message.reply_text(f"🛠 (только вам как админу) Причина: {image_error}")
         except Exception as e:
             await update.message.reply_text(
                 "⚠ Не удалось получить ответ от ИИ. Проверьте, что указан правильный "
