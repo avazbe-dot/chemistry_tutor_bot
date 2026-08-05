@@ -19,6 +19,8 @@
 """
 
 import asyncio
+import base64
+import io
 import json
 import logging
 import os
@@ -43,7 +45,7 @@ from telegram.ext import (
 
 # Если бот запущен на хостинге (Render и т.п.), токен и ключ берутся из переменных
 # окружения BOT_TOKEN / GEMINI_KEY. Если их нет — используются значения ниже (для Pydroid).
-TOKEN = os.environ.get("BOT_TOKEN", "ВАШ_ТОКЕН_ОТ_BOTFATHER").strip()
+TOKEN = os.environ.get("BOT_TOKEN", "8969819684:AAF3_3qBi0Ot8smLQ99McaE7XZnDcMW8EK8").strip()
 GEMINI_API_KEY = os.environ.get("GEMINI_KEY", "ВАШ_КЛЮЧ_GEMINI").strip()  # aistudio.google.com/apikey
 
 # Только этот Telegram ID может добавлять/удалять материалы.
@@ -76,8 +78,8 @@ STORE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "content_s
 
 # Облачное хранение (jsonbin.io) — чтобы материалы не терялись при передеплое на Render.
 # Если переменные не заданы, используется обычный локальный файл (подходит для Pydroid).
-JSONBIN_API_KEY = os.environ.get("JSONBIN_API_KEY", "").strip()
-JSONBIN_BIN_ID = os.environ.get("JSONBIN_BIN_ID", "").strip()
+JSONBIN_API_KEY = os.environ.get("JSONBIN_API_KEY", "$2a$10$IlP.MabUn6WyqUBDhp16NOk2agb6lp28oNbHfBQMVRTndgifnLwoO").strip()
+JSONBIN_BIN_ID = os.environ.get("JSONBIN_BIN_ID", "6a538153f5f4af5e29840510").strip()
 _USE_CLOUD_STORE = bool(JSONBIN_API_KEY and JSONBIN_BIN_ID)
 
 
@@ -325,6 +327,113 @@ def call_gemini(question):
 
     # все модели из списка вернули 404 — сообщаем об этом понятно
     raise last_error or RuntimeError("Не удалось найти рабочую модель Gemini.")
+
+
+# Модели Gemini, умеющие генерировать изображения (response_modalities: TEXT + IMAGE).
+# Пробуются по очереди, как и текстовые модели выше.
+GEMINI_IMAGE_MODELS_TO_TRY = [
+    "gemini-2.5-flash-image",
+    "gemini-2.0-flash-preview-image-generation",
+]
+
+
+def call_gemini_with_image(question):
+    """Запрос к Gemini с возможностью получить и текст, и рисунок.
+    Модель сама решает, нужен ли рисунок (например, для реакции, изменения цвета
+    раствора/осадка, строения молекулы) — и если да, рисует его с правильными цветами.
+    Возвращает (текст, image_bytes или None)."""
+
+    prompt = (
+        "Ты — помощник по химии в Telegram-боте для школьников. Ответь на вопрос ниже.\n\n"
+        "ВАЖНО ПРО РИСУНОК: если вопрос про химическую реакцию, уравнение реакции, "
+        "качественную реакцию, изменение цвета раствора/осадка/индикатора, строение молекулы "
+        "или про что-то, что нагляднее показать картинкой — ОБЯЗАТЕЛЬНО нарисуй понятную, "
+        "аккуратную схему или рисунок в дополнение к текстовому ответу. Подписывай на рисунке "
+        "вещества и, если в реакции реально меняется цвет (например, выпадает цветной осадок, "
+        "раствор окрашивается, меняется цвет индикатора) — используй на рисунке ИМЕННО ЭТИ "
+        "РЕАЛЬНЫЕ ЦВЕТА, чтобы ученик увидел, как это выглядит на самом деле.\n\n"
+        "Если вопрос простой (определение термина, короткий факт, расчёт в 1-2 действия) и "
+        "рисунок не добавляет пользы — рисунок не нужен, ответь только текстом.\n\n"
+        "Текстовую часть ответа делай по тем же правилам:\n"
+        "1) ПРОСТОЙ вопрос — ответь МАКСИМАЛЬНО КОРОТКО: 1-3 предложения, только суть, без "
+        "длинных вступлений.\n"
+        "2) СЛОЖНАЯ или СВЕРХТРУДНАЯ задача — решай ПОЛНОСТЬЮ и подробно: распиши все шаги по "
+        "порядку, покажи промежуточные вычисления и дай итоговый ответ в конце.\n\n"
+        "Не пиши лишних общих фраз и не повторяй один и тот же факт разными словами. "
+        "ВАЖНО: пиши обычным простым текстом, без LaTeX ($...$, \\text{}, \\frac и т.д.) и без "
+        "markdown-разметки (**жирный**, # заголовки). Химические формулы пиши как обычный текст "
+        "с обычными цифрами, например C6H5OH, H2SO4, CH3COOH.\n\n"
+        f"Вопрос: {question}"
+    )
+
+    last_error = None
+    for model_name in GEMINI_IMAGE_MODELS_TO_TRY:
+        url = (
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{model_name}:generateContent?key={GEMINI_API_KEY}"
+        )
+        payload = json.dumps({
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "responseModalities": ["TEXT", "IMAGE"],
+            },
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            url, data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": "Mozilla/5.0 (compatible; ChemistryBot/1.0)",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            body = ""
+            try:
+                body = e.read().decode("utf-8")[:300]
+            except Exception:
+                pass
+            last_error = RuntimeError(f"Gemini API вернул ошибку {e.code} для модели {model_name}: {body}")
+            # 404/NOT_FOUND — модель отключена или недоступна, пробуем следующую.
+            if e.code == 404:
+                continue
+            raise last_error
+
+        candidates = data.get("candidates") or []
+        if not candidates:
+            feedback = data.get("promptFeedback", {})
+            reason = feedback.get("blockReason", "неизвестна")
+            last_error = RuntimeError(f"Gemini не вернул ответ (возможно, вопрос заблокирован фильтром). Причина: {reason}")
+            raise last_error
+
+        parts = candidates[0].get("content", {}).get("parts")
+        if not parts:
+            finish_reason = candidates[0].get("finishReason", "неизвестна")
+            last_error = RuntimeError(f"Gemini вернул пустой ответ. Причина: {finish_reason}")
+            raise last_error
+
+        text_chunks = []
+        image_bytes = None
+        for part in parts:
+            if "text" in part and part["text"]:
+                text_chunks.append(part["text"])
+            inline_data = part.get("inlineData") or part.get("inline_data")
+            if inline_data and inline_data.get("data") and image_bytes is None:
+                try:
+                    image_bytes = base64.b64decode(inline_data["data"])
+                except Exception:
+                    image_bytes = None
+
+        text = clean_ai_text("\n".join(text_chunks).strip()) or ("(рисунок к ответу)" if image_bytes else "(пустой ответ от ИИ)")
+        return text, image_bytes
+
+    # если ни одна image-модель не сработала (например, все вернули 404) —
+    # пробуем обычную текстовую модель, чтобы пользователь хотя бы получил ответ без рисунка
+    try:
+        return call_gemini(question), None
+    except Exception:
+        raise last_error or RuntimeError("Не удалось найти рабочую модель Gemini с поддержкой изображений.")
 
 
 def _test_one_gemini_model(model_name, timeout=25):
@@ -1549,16 +1658,30 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if context.user_data.get("awaiting_ai"):
         question = update.message.text
-        await update.message.reply_text("🤖 Думаю...")
+        thinking_msg = await update.message.reply_text("🤖 Думаю и рисую, если нужно...")
         try:
-            answer = await asyncio.to_thread(call_gemini, question)
-            await update.message.reply_text(answer)
+            answer, image_bytes = await asyncio.to_thread(call_gemini_with_image, question)
+            if image_bytes:
+                # Если рисунок есть — отправляем его с подписью (Telegram ограничивает
+                # подпись к фото ~1024 символами), а длинный текст досылаем отдельным
+                # сообщением, чтобы ничего не обрезалось.
+                caption = answer if len(answer) <= 1000 else answer[:1000] + "…"
+                await update.message.reply_photo(photo=io.BytesIO(image_bytes), caption=caption)
+                if len(answer) > 1000:
+                    await update.message.reply_text(answer)
+            else:
+                await update.message.reply_text(answer)
         except Exception as e:
             await update.message.reply_text(
                 "⚠ Не удалось получить ответ от ИИ. Проверьте, что указан правильный "
                 "GEMINI_API_KEY и есть интернет.\n\n"
                 f"Ошибка: {e}"
             )
+        finally:
+            try:
+                await thinking_msg.delete()
+            except Exception:
+                pass
     else:
         await update.message.reply_text("Напишите /start, чтобы открыть меню.")
 
