@@ -332,8 +332,9 @@ def call_gemini(question):
 # Модели Gemini, умеющие генерировать изображения (response_modalities: TEXT + IMAGE).
 # Пробуются по очереди, как и текстовые модели выше.
 GEMINI_IMAGE_MODELS_TO_TRY = [
-    "gemini-2.5-flash-image",
-    "gemini-2.0-flash-preview-image-generation",
+    "gemini-3.1-flash-image",       # Nano Banana 2 — актуальная модель, есть бесплатный лимит
+    "gemini-2.5-flash-image",       # Nano Banana (первая версия) — запасной вариант
+    "gemini-3.1-flash-lite-image",  # Nano Banana 2 Lite — самая быстрая/дешёвая, ещё один запасной
 ]
 
 
