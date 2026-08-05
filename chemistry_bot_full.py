@@ -395,8 +395,10 @@ def call_gemini_with_image(question):
             except Exception:
                 pass
             last_error = RuntimeError(f"Gemini API вернул ошибку {e.code} для модели {model_name}: {body}")
-            # 404/NOT_FOUND — модель отключена или недоступна, пробуем следующую.
-            if e.code == 404:
+            # 404/NOT_FOUND — модель отключена или недоступна; 429 — закончилась квота
+            # именно у этой модели. В обоих случаях пробуем следующую image-модель из списка,
+            # а не сдаёмся сразу (вдруг у второй модели квота ещё есть).
+            if e.code in (404, 429):
                 continue
             raise last_error
 
