@@ -112,8 +112,22 @@ def load_store():
 
 
 def save_store():
+    global STORE
     if _USE_CLOUD_STORE:
         try:
+            # Перед записью подтягиваем самую свежую версию из облака и объединяем
+            # её с тем, что накопилось у нас в памяти. Это защита на случай, если
+            # где-то в фоне ещё жив старый процесс бота (например, старый деплой не
+            # успел остановиться) — без слияния он мог бы затереть чужие свежие
+            # изменения своей устаревшей копией.
+            try:
+                cloud_now = load_store()
+            except Exception:
+                cloud_now = {}
+            merged = dict(cloud_now)
+            merged.update(STORE)
+            STORE = merged
+
             url = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}"
             payload = json.dumps(STORE).encode("utf-8")
             req = urllib.request.Request(
