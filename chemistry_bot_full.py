@@ -1336,6 +1336,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as inner_e:
             logging.warning(f"Не удалось отправить новое меню после протухшей кнопки: {inner_e}")
         return
+    except Exception as e:
+        logging.warning(f"query.answer() не прошёл (сеть?): {e}")
     data = query.data
     parts = data.split(":")
     remember_user(user_id)
@@ -1963,7 +1965,14 @@ def main():
     else:
         print("⚠ SELF_PING_URL/RENDER_EXTERNAL_URL не задан — само-пинг выключен, бот может засыпать на бесплатном Render.")
 
-    app = Application.builder().token(TOKEN).build()
+    from telegram.request import HTTPXRequest
+    app = (
+        Application.builder()
+        .token(TOKEN)
+        .request(HTTPXRequest(connect_timeout=20, read_timeout=30, write_timeout=30, pool_timeout=20))
+        .get_updates_request(HTTPXRequest(connect_timeout=20, read_timeout=30, pool_timeout=20))
+        .build()
+    )
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
@@ -1983,7 +1992,7 @@ def main():
     app.add_error_handler(global_error_handler)
 
     print("Бот запущен! Нажмите Ctrl+C, чтобы остановить.")
-    app.run_polling()
+    app.run_polling(bootstrap_retries=-1, drop_pending_updates=True)
 
 
 if __name__ == "__main__":
