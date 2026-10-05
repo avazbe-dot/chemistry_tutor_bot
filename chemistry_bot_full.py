@@ -45,6 +45,8 @@ from telegram.ext import (
 
 # Если бот запущен на хостинге (Render и т.п.), токен и ключ берутся из переменных
 # окружения BOT_TOKEN / GEMINI_KEY. Если их нет — используются значения ниже (для Pydroid).
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+
 TOKEN = os.environ.get("BOT_TOKEN", "8969819684:AAF3_3qBi0Ot8smLQ99McaE7XZnDcMW8EK8").strip()
 GEMINI_API_KEY = os.environ.get("GEMINI_KEY", "ВАШ_КЛЮЧ_GEMINI").strip()  # aistudio.google.com/apikey
 
@@ -1308,6 +1310,7 @@ async def show_leaf(query, context, key):
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    print(f"CALLBACK получен: {query.data}", flush=True)
     user_id = update.effective_user.id
     try:
         await query.answer()
