@@ -207,8 +207,13 @@ def grant_access(user_id, days):
     return new_expiry
 
 
+# Бот бесплатный для всех. Чтобы снова включить подписки, на Render
+# задайте переменную окружения FREE_FOR_ALL=0
+FREE_FOR_ALL = os.environ.get("FREE_FOR_ALL", "1") != "0"
+
+
 def has_access(user_id):
-    if is_admin(user_id):
+    if FREE_FOR_ALL or is_admin(user_id):
         return True
     expiry = get_sub_expiry(user_id)
     return bool(expiry and datetime.now() < expiry)
@@ -219,6 +224,8 @@ def access_status_line(user_id):
     чтобы ученик всегда видел, сколько у него осталось платного доступа."""
     if is_admin(user_id):
         return "👑 Вы администратор — доступ открыт всегда."
+    if FREE_FOR_ALL:
+        return ""
     expiry = get_sub_expiry(user_id)
     if not expiry:
         return ""
@@ -1200,6 +1207,9 @@ async def myaccess_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if is_admin(user_id):
         await update.message.reply_text("Вы администратор — доступ открыт всегда.")
+        return
+    if FREE_FOR_ALL:
+        await update.message.reply_text("✅ Бот бесплатный для всех — доступ открыт без ограничений.")
         return
     expiry = get_sub_expiry(user_id)
     if expiry and expiry > datetime.now():
